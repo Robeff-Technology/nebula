@@ -192,6 +192,16 @@ public:
     }
   }
 
+  /// @brief Get the packet's timestamp in nanoseconds since epoch. Overridable so that sensors
+  /// whose packet timestamp is not already a correct Unix/UTC time (e.g. due to a firmware
+  /// limitation) can apply a correction.
+  /// @param packet The packet
+  /// @return The packet's timestamp in nanoseconds since epoch
+  [[nodiscard]] virtual uint64_t get_packet_timestamp_ns(const PacketT & packet) const
+  {
+    return hesai_packet::get_timestamp_ns(packet);
+  }
+
   [[nodiscard]] virtual point_filters::DitherTransform get_dither_transform() const
   {
     return point_filters::g_default_dither_transform;

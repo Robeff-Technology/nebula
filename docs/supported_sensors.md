@@ -20,6 +20,7 @@ The `sensor_model` parameter below decides which sensor driver is launched.
 | Pandar QT128 | PandarQT128    | PandarQT128.param.yaml  | ✅          |
 | Pandar AT128 | PandarAT128    | PandarAT128.param.yaml  | ✅\*        |
 | Pandar OT128 | Pandar128E4X   | Pandar128E4X.param.yaml | ✅          |
+| Pandar JT128 | PandarJT128    | PandarJT128.param.yaml  | ⚠️          |
 
 \*: AT128 needs software version 3.50.8 or newer for the `scan_angle` setting to work correctly.
 

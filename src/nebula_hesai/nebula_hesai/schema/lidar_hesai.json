@@ -14,6 +14,7 @@
         "PandarQT64",
         "PandarQT128",
         "Pandar128E4X",
+        "PandarJT128",
         "PandarAT128"
       ]
     },
@@ -119,6 +120,17 @@
           "minimum": 1,
           "maximum": 360000,
           "description": "The size of the horizontal bins in millidegrees"
+        }
+      }
+    },
+    "imu_output": {
+      "type": "object",
+      "description": "Controls output of the sensor's built-in IMU data, published as sensor_msgs/Imu on the 'pandar_imu' topic. Only supported by sensors with a built-in IMU.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to publish IMU data on the 'pandar_imu' topic."
         }
       }
     },

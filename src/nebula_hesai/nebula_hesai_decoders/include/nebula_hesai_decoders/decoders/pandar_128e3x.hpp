@@ -44,21 +44,11 @@ struct Tail128E3X
   uint32_t timestamp;
   uint8_t factory_information;
 
-  /* Ignored optional fields */
+  /* Optional fields, present only if the corresponding flag in the packet header is set. The
+   * sensor sends all of them in its factory configuration. */
 
   uint32_t udp_sequence;
-
-  uint16_t imu_temperature;
-  uint16_t imu_acceleration_unit;
-  uint16_t imu_angular_velocity_unit;
-  uint32_t imu_timestamp;
-  uint16_t imu_x_axis_acceleration;
-  uint16_t imu_y_axis_acceleration;
-  uint16_t imu_z_axis_acceleration;
-  uint16_t imu_x_axis_angular_velocity;
-  uint16_t imu_y_axis_angular_velocity;
-  uint16_t imu_z_axis_angular_velocity;
-
+  TailImu imu;
   uint32_t crc_tail;
 
   /// @brief Get the azimuth state of the given block in the packet

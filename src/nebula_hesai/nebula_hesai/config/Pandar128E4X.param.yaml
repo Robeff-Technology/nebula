@@ -22,7 +22,7 @@
     calibration_file: $(find-pkg-share nebula_hesai_decoders)/calibration/$(var sensor_model).csv
     calibration_download_enabled: true
     rotation_speed: 600
-    return_mode: Dual
+    return_mode: Strongest
     ptp_profile: automotive
     ptp_domain: 0
     ptp_transport_type: L2
@@ -31,6 +31,8 @@
     retry_hw: true
     dual_return_distance_threshold: 0.1
     hires_mode: true
+    imu_output:
+      enabled: true
     diagnostics:
       pointcloud_publish_rate:
         frequency_ok:

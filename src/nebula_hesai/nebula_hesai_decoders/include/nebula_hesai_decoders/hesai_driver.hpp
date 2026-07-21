@@ -22,6 +22,7 @@
 #include "nebula_hesai_decoders/decoders/functional_safety.hpp"
 #include "nebula_hesai_decoders/decoders/hesai_packet.hpp"
 #include "nebula_hesai_decoders/decoders/hesai_scan_decoder.hpp"
+#include "nebula_hesai_decoders/decoders/imu_decoder.hpp"
 #include "nebula_hesai_decoders/decoders/packet_loss_detector.hpp"
 
 #include <nebula_core_common/loggers/logger.hpp>
@@ -53,6 +54,7 @@ private:
     FunctionalSafetyDecoderBase::alive_cb_t alive_cb,
     FunctionalSafetyDecoderBase::stuck_cb_t stuck_cb,
     FunctionalSafetyDecoderBase::status_cb_t status_cb, PacketLossDetectorBase::lost_cb_t lost_cb,
+    ImuDecoderBase::imu_cb_t imu_cb,
     std::shared_ptr<point_filters::BlockageMaskPlugin> blockage_mask_plugin = nullptr);
 
   template <typename SensorT>
@@ -104,6 +106,26 @@ private:
     return nullptr;
   }
 
+  template <typename SensorT>
+  std::enable_if_t<
+    hesai_packet::HasImu<typename SensorT::packet_t>::value,
+    std::shared_ptr<ImuDecoderTypedBase<typename SensorT::packet_t>>>
+  initialize_imu_decoder(ImuDecoderBase::imu_cb_t imu_cb)
+  {
+    auto imu_decoder = std::make_shared<ImuDecoder<typename SensorT::packet_t>>();
+    imu_decoder->set_imu_callback(std::move(imu_cb));
+    return imu_decoder;
+  }
+
+  template <typename SensorT>
+  std::enable_if_t<
+    !hesai_packet::HasImu<typename SensorT::packet_t>::value,
+    std::shared_ptr<ImuDecoderTypedBase<typename SensorT::packet_t>>>
+  initialize_imu_decoder(ImuDecoderBase::imu_cb_t /* imu_cb */)
+  {
+    return nullptr;
+  }
+
 public:
   HesaiDriver() = delete;
   /// @brief Constructor
@@ -120,6 +142,7 @@ public:
     FunctionalSafetyDecoderBase::stuck_cb_t stuck_cb = nullptr,
     FunctionalSafetyDecoderBase::status_cb_t status_cb = nullptr,
     PacketLossDetectorBase::lost_cb_t lost_cb = nullptr,
+    ImuDecoderBase::imu_cb_t imu_cb = nullptr,
     std::shared_ptr<point_filters::BlockageMaskPlugin> blockage_mask_plugin = nullptr);
 
   /// @brief Get current status of this driver

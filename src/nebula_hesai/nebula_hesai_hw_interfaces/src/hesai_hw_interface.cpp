@@ -1145,6 +1145,17 @@ HesaiStatus HesaiHwInterface::check_and_set_config(
       auto current_ptp = get_ptp_config();
       bool needs_ptp_update = !ptp_config_matches_desired(*current_ptp, *sensor_configuration);
 
+      // The JT128 does not implement the PTC "set PTP config" command (it responds with
+      // "unsupported command"). Its PTP settings must be configured on the sensor directly, so the
+      // push is skipped here to avoid aborting setup.
+      if (needs_ptp_update &&
+          sensor_configuration->sensor_model == SensorModel::HESAI_PANDARJT128) {
+        logger_->warn(
+          "The JT128 does not support setting PTP configuration over PTC. Skipping; configure PTP "
+          "on the sensor directly if needed.");
+        needs_ptp_update = false;
+      }
+
       if (needs_ptp_update) {
         std::ostringstream tmp_ostringstream;
         tmp_ostringstream << "Trying to set PTP Config: " << sensor_configuration->ptp_profile
@@ -1202,7 +1213,7 @@ HesaiStatus HesaiHwInterface::check_and_set_config(
   }
 
   if (
-    sensor_configuration->sensor_model == SensorModel::HESAI_PANDAR128_E3X ||
+    sensor_configuration->sensor_model == SensorModel::HESAI_PANDARJT128 ||
     sensor_configuration->sensor_model == SensorModel::HESAI_PANDAR128_E4X) {
     auto hires_currently_enabled = get_high_resolution_mode();
 
@@ -1399,7 +1410,7 @@ int HesaiHwInterface::nebula_model_to_hesai_model_no(nebula::drivers::SensorMode
       return 32;
     case SensorModel::HESAI_PANDARXT32M:
       return 38;
-    case SensorModel::HESAI_PANDAR128_E3X:  // check required
+    case SensorModel::HESAI_PANDARJT128:  // check required
       return 40;
     case SensorModel::HESAI_PANDAR128_E4X:  // OT128
       return 42;

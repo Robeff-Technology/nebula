@@ -97,6 +97,14 @@ if(BUILD_TESTING)
   target_include_directories(test_hesai_functional_safety PRIVATE include)
   target_link_libraries(test_hesai_functional_safety hesai_ros_wrapper)
 
+  # IMU decoder test
+  ament_add_gtest(test_hesai_imu tests/test_hesai_imu.cpp)
+  target_link_libraries(
+    test_hesai_imu
+    nebula_core_common::nebula_core_common
+    nebula_hesai_common::nebula_hesai_common
+    nebula_hesai_decoders::nebula_hesai_decoders)
+
   # Decoder tests
   add_library(hesai_ros_decoder_test SHARED tests/hesai_ros_decoder_test.cpp)
   target_link_libraries(

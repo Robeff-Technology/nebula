@@ -10,6 +10,7 @@
 #include "nebula_hesai_decoders/decoders/pandar_40.hpp"
 #include "nebula_hesai_decoders/decoders/pandar_64.hpp"
 #include "nebula_hesai_decoders/decoders/pandar_at128.hpp"
+#include "nebula_hesai_decoders/decoders/pandar_jt128.hpp"
 #include "nebula_hesai_decoders/decoders/pandar_qt128.hpp"
 #include "nebula_hesai_decoders/decoders/pandar_qt64.hpp"
 #include "nebula_hesai_decoders/decoders/pandar_xt16.hpp"
@@ -31,6 +32,7 @@ HesaiDriver::HesaiDriver(
   FunctionalSafetyDecoderBase::alive_cb_t alive_cb,
   FunctionalSafetyDecoderBase::stuck_cb_t stuck_cb,
   FunctionalSafetyDecoderBase::status_cb_t status_cb, PacketLossDetectorBase::lost_cb_t lost_cb,
+  ImuDecoderBase::imu_cb_t imu_cb,
   std::shared_ptr<point_filters::BlockageMaskPlugin> blockage_mask_plugin)
 : logger_(logger)
 {
@@ -40,46 +42,46 @@ HesaiDriver::HesaiDriver(
   switch (sensor_configuration->sensor_model) {
     case SensorModel::HESAI_PANDAR64:
       scan_decoder_ = initialize_decoder<Pandar64>(
-        sensor_configuration, calibration_data, alive_cb, stuck_cb, status_cb, lost_cb);
+        sensor_configuration, calibration_data, alive_cb, stuck_cb, status_cb, lost_cb, imu_cb);
       break;
     case SensorModel::HESAI_PANDAR40P:
     case SensorModel::HESAI_PANDAR40M:
       scan_decoder_ = initialize_decoder<Pandar40>(
-        sensor_configuration, calibration_data, alive_cb, stuck_cb, status_cb, lost_cb);
+        sensor_configuration, calibration_data, alive_cb, stuck_cb, status_cb, lost_cb, imu_cb);
       break;
     case SensorModel::HESAI_PANDARQT64:
       scan_decoder_ = initialize_decoder<PandarQT64>(
-        sensor_configuration, calibration_data, alive_cb, stuck_cb, status_cb, lost_cb);
+        sensor_configuration, calibration_data, alive_cb, stuck_cb, status_cb, lost_cb, imu_cb);
       break;
     case SensorModel::HESAI_PANDARQT128: {
       scan_decoder_ = initialize_decoder<PandarQT128>(
-        sensor_configuration, calibration_data, alive_cb, stuck_cb, status_cb, lost_cb);
+        sensor_configuration, calibration_data, alive_cb, stuck_cb, status_cb, lost_cb, imu_cb);
       break;
     }
     case SensorModel::HESAI_PANDARXT16:
       scan_decoder_ = initialize_decoder<PandarXT16>(
-        sensor_configuration, calibration_data, alive_cb, stuck_cb, status_cb, lost_cb);
+        sensor_configuration, calibration_data, alive_cb, stuck_cb, status_cb, lost_cb, imu_cb);
       break;
     case SensorModel::HESAI_PANDARXT32:
       scan_decoder_ = initialize_decoder<PandarXT32>(
-        sensor_configuration, calibration_data, alive_cb, stuck_cb, status_cb, lost_cb);
+        sensor_configuration, calibration_data, alive_cb, stuck_cb, status_cb, lost_cb, imu_cb);
       break;
     case SensorModel::HESAI_PANDARXT32M:
       scan_decoder_ = initialize_decoder<PandarXT32M>(
-        sensor_configuration, calibration_data, alive_cb, stuck_cb, status_cb, lost_cb);
+        sensor_configuration, calibration_data, alive_cb, stuck_cb, status_cb, lost_cb, imu_cb);
       break;
     case SensorModel::HESAI_PANDARAT128:
       scan_decoder_ = initialize_decoder<PandarAT128>(
-        sensor_configuration, calibration_data, alive_cb, stuck_cb, status_cb, lost_cb);
+        sensor_configuration, calibration_data, alive_cb, stuck_cb, status_cb, lost_cb, imu_cb);
       break;
-    case SensorModel::HESAI_PANDAR128_E3X: {
-      scan_decoder_ = initialize_decoder<Pandar128E3X>(
-        sensor_configuration, calibration_data, alive_cb, stuck_cb, status_cb, lost_cb);
+    case SensorModel::HESAI_PANDARJT128: {
+      scan_decoder_ = initialize_decoder<PandarJT128>(
+        sensor_configuration, calibration_data, alive_cb, stuck_cb, status_cb, lost_cb, imu_cb);
       break;
     }
     case SensorModel::HESAI_PANDAR128_E4X: {
       scan_decoder_ = initialize_decoder<Pandar128E4X>(
-        sensor_configuration, calibration_data, alive_cb, stuck_cb, status_cb, lost_cb,
+        sensor_configuration, calibration_data, alive_cb, stuck_cb, status_cb, lost_cb, imu_cb,
         std::move(blockage_mask_plugin));
       break;
     }
@@ -102,17 +104,19 @@ std::shared_ptr<HesaiScanDecoder> HesaiDriver::initialize_decoder(
   FunctionalSafetyDecoderBase::alive_cb_t alive_cb,
   FunctionalSafetyDecoderBase::stuck_cb_t stuck_cb,
   FunctionalSafetyDecoderBase::status_cb_t status_cb, PacketLossDetectorBase::lost_cb_t lost_cb,
+  ImuDecoderBase::imu_cb_t imu_cb,
   std::shared_ptr<point_filters::BlockageMaskPlugin> blockage_mask_plugin)
 {
   uint16_t sensor_rpm = sensor_configuration->rotation_speed;
   auto functional_safety_decoder =
     initialize_functional_safety_decoder<SensorT>(alive_cb, stuck_cb, status_cb, sensor_rpm);
   auto packet_loss_detector = initialize_packet_loss_detector<SensorT>(lost_cb);
+  auto imu_decoder = initialize_imu_decoder<SensorT>(std::move(imu_cb));
 
   using CalibT = typename SensorT::angle_corrector_t::correction_data_t;
   return std::make_shared<HesaiDecoder<SensorT>>(
     sensor_configuration, std::dynamic_pointer_cast<const CalibT>(calibration_configuration),
-    logger_->child("Decoder"), functional_safety_decoder, packet_loss_detector,
+    logger_->child("Decoder"), functional_safety_decoder, packet_loss_detector, imu_decoder,
     std::move(blockage_mask_plugin));
 }
 

@@ -38,6 +38,7 @@ namespace drivers
 {
 
 bool supports_functional_safety(const SensorModel & sensor_model);
+bool supports_imu(const SensorModel & sensor_model);
 
 struct AdvancedFunctionalSafetyConfiguration
 {
@@ -195,6 +196,7 @@ struct HesaiSensorConfiguration : public LidarConfigurationBase
   std::optional<std::string> downsample_mask_path;
   bool hires_mode;
   std::optional<uint32_t> blockage_mask_horizontal_bin_size_mdeg;
+  bool imu_output_enabled{true};
   std::optional<std::string> sync_diagnostics_topic;
   std::optional<AdvancedFunctionalSafetyConfiguration> functional_safety;
 };
@@ -237,6 +239,9 @@ inline std::ostream & operator<<(std::ostream & os, HesaiSensorConfiguration con
                std::to_string(arg.blockage_mask_horizontal_bin_size_mdeg.value()) + " mdeg"
            : "disabled")
      << '\n';
+  if (supports_imu(arg.sensor_model)) {
+    os << "IMU Output: " << (arg.imu_output_enabled ? "enabled" : "disabled") << '\n';
+  }
   os << "Synchronization Diagnostics: "
      << (arg.sync_diagnostics_topic ? ("enabled, topic: " + arg.sync_diagnostics_topic.value())
                                     : "disabled");
@@ -620,7 +625,7 @@ inline ReturnMode return_mode_from_string_hesai(
     case SensorModel::HESAI_PANDARXT16:
     case SensorModel::HESAI_PANDARXT32:
     case SensorModel::HESAI_PANDARXT32M:
-    case SensorModel::HESAI_PANDAR128_E3X:
+    case SensorModel::HESAI_PANDARJT128:
     case SensorModel::HESAI_PANDAR128_E4X:
     case SensorModel::HESAI_PANDARQT128:
       if (return_mode == "Last") return ReturnMode::LAST;
@@ -662,7 +667,7 @@ inline ReturnMode return_mode_from_int_hesai(
     case SensorModel::HESAI_PANDARXT16:
     case SensorModel::HESAI_PANDARXT32:
     case SensorModel::HESAI_PANDARXT32M:
-    case SensorModel::HESAI_PANDAR128_E3X:
+    case SensorModel::HESAI_PANDARJT128:
     case SensorModel::HESAI_PANDAR128_E4X:
     case SensorModel::HESAI_PANDARQT128:
       if (return_mode == 0) return ReturnMode::LAST;
@@ -702,7 +707,7 @@ inline int int_from_return_mode_hesai(
     case SensorModel::HESAI_PANDARXT16:
     case SensorModel::HESAI_PANDARXT32:
     case SensorModel::HESAI_PANDARXT32M:
-    case SensorModel::HESAI_PANDAR128_E3X:
+    case SensorModel::HESAI_PANDARJT128:
     case SensorModel::HESAI_PANDAR128_E4X:
     case SensorModel::HESAI_PANDARQT128:
       if (return_mode == ReturnMode::LAST) return 0;
@@ -742,6 +747,9 @@ inline bool supports_lidar_monitor(const SensorModel & sensor_model)
     case drivers::SensorModel::HESAI_PANDARAT128:
     case drivers::SensorModel::HESAI_PANDAR40P:
     case drivers::SensorModel::HESAI_PANDAR64:
+    // Confirmed on real hardware: the JT128's lidar-monitor HTTP endpoint refuses the connection
+    // (it is not exposed), causing continuous "Connection refused" errors when polled.
+    case drivers::SensorModel::HESAI_PANDARJT128:
       return false;
     default:
       return true;
@@ -754,9 +762,26 @@ inline bool supports_lidar_monitor(const SensorModel & sensor_model)
 inline bool supports_functional_safety(const SensorModel & sensor_model)
 {
   switch (sensor_model) {
-    case SensorModel::HESAI_PANDAR128_E3X:
     case SensorModel::HESAI_PANDAR128_E4X:
     case SensorModel::HESAI_PANDARQT128:
+      return true;
+    // The JT128's packets do not contain a functional safety section (confirmed via packet
+    // capture: the header's functional-safety flag bit is unset and the packet size matches
+    // exactly with no room for one), unlike the otherwise-similar OT128 (128E4X).
+    case SensorModel::HESAI_PANDARJT128:
+    default:
+      return false;
+  }
+}
+
+/// @brief Whether the given sensor model outputs IMU data in its pointcloud packets
+/// @param sensor_model Sensor model
+/// @return True if the sensor model outputs IMU data, false otherwise
+inline bool supports_imu(const SensorModel & sensor_model)
+{
+  switch (sensor_model) {
+    case SensorModel::HESAI_PANDARJT128:
+    case SensorModel::HESAI_PANDAR128_E4X:
       return true;
     default:
       return false;
@@ -774,7 +799,7 @@ inline bool supports_packet_loss_detection(const SensorModel & sensor_model)
     case SensorModel::HESAI_PANDAR40M:
     case SensorModel::HESAI_PANDARQT128:
     case SensorModel::HESAI_PANDARAT128:
-    case SensorModel::HESAI_PANDAR128_E3X:
+    case SensorModel::HESAI_PANDARJT128:
     case SensorModel::HESAI_PANDAR128_E4X:
       return true;
     default:

@@ -177,6 +177,67 @@ struct BodyWithCrc : public Body<BlockT, BlockN>
   uint32_t crc_body;
 };
 
+/// @brief The IMU data block found in the packet tail of sensors with a built-in IMU (e.g. OT128).
+/// Acceleration is transmitted in g, angular velocity in deg/s, with per-packet scale factors.
+struct TailImu
+{
+  int16_t temperature;
+  uint16_t acceleration_unit;
+  uint16_t angular_velocity_unit;
+  uint32_t timestamp;
+  int16_t x_axis_acceleration;
+  int16_t y_axis_acceleration;
+  int16_t z_axis_acceleration;
+  int16_t x_axis_angular_velocity;
+  int16_t y_axis_angular_velocity;
+  int16_t z_axis_angular_velocity;
+
+  /// @brief Get the IMU temperature in degrees Celsius
+  [[nodiscard]] double get_temperature_deg_c() const { return temperature / 100.; }
+
+  /// @brief Get the acceleration scale factor in g/LSB
+  [[nodiscard]] double get_acceleration_unit_g() const { return acceleration_unit / 1e6; }
+
+  /// @brief Get the angular velocity scale factor in (deg/s)/LSB
+  [[nodiscard]] double get_angular_velocity_unit_deg_s() const
+  {
+    return angular_velocity_unit / 1e5;
+  }
+
+  /// @brief Get the IMU sampling time in nanoseconds. The sensor transmits this with a resolution
+  /// of 25 us and an undocumented epoch, so it is only usable for relative comparisons.
+  [[nodiscard]] uint64_t get_timestamp_ns() const
+  {
+    return static_cast<uint64_t>(timestamp) * 25'000;
+  }
+
+  [[nodiscard]] double get_acceleration_x_g() const
+  {
+    return x_axis_acceleration * get_acceleration_unit_g();
+  }
+  [[nodiscard]] double get_acceleration_y_g() const
+  {
+    return y_axis_acceleration * get_acceleration_unit_g();
+  }
+  [[nodiscard]] double get_acceleration_z_g() const
+  {
+    return z_axis_acceleration * get_acceleration_unit_g();
+  }
+
+  [[nodiscard]] double get_angular_velocity_x_deg_s() const
+  {
+    return x_axis_angular_velocity * get_angular_velocity_unit_deg_s();
+  }
+  [[nodiscard]] double get_angular_velocity_y_deg_s() const
+  {
+    return y_axis_angular_velocity * get_angular_velocity_unit_deg_s();
+  }
+  [[nodiscard]] double get_angular_velocity_z_deg_s() const
+  {
+    return z_axis_angular_velocity * get_angular_velocity_unit_deg_s();
+  }
+};
+
 /// @brief Base struct for all Hesai packets. This struct is not allowed to have any non-static
 /// members, otherwise memory layout is not guaranteed for the derived structs.
 /// @tparam nBlocks The number of blocks in the packet
@@ -262,6 +323,17 @@ struct HasPacketLossDetection : std::false_type
 template <typename PacketT>
 struct HasPacketLossDetection<
   PacketT, std::void_t<decltype(std::declval<PacketT>().tail.udp_sequence)>> : std::true_type
+{
+};
+
+// Helper trait to determine if a given struct has an IMU data part
+template <typename PacketT, typename = void>
+struct HasImu : std::false_type
+{
+};
+
+template <typename PacketT>
+struct HasImu<PacketT, std::void_t<decltype(std::declval<PacketT>().tail.imu)>> : std::true_type
 {
 };
 

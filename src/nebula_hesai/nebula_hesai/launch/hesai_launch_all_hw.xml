@@ -4,6 +4,7 @@
     <choice value="Pandar40P" />
     <choice value="Pandar64" />
     <choice value="Pandar128E4X" />
+    <choice value="PandarJT128" />
     <choice value="PandarAT128" />
     <choice value="PandarQT64" />
     <choice value="PandarQT128" />

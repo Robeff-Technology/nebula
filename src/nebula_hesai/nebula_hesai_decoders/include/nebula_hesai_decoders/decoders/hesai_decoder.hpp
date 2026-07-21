@@ -21,6 +21,7 @@
 #include "nebula_hesai_decoders/decoders/functional_safety.hpp"
 #include "nebula_hesai_decoders/decoders/hesai_packet.hpp"
 #include "nebula_hesai_decoders/decoders/hesai_scan_decoder.hpp"
+#include "nebula_hesai_decoders/decoders/imu_decoder.hpp"
 #include "nebula_hesai_decoders/decoders/packet_loss_detector.hpp"
 
 #include <nebula_core_common/loggers/logger.hpp>
@@ -71,6 +72,7 @@ private:
   std::shared_ptr<FunctionalSafetyDecoderTypedBase<typename SensorT::packet_t>>
     functional_safety_decoder_;
   std::shared_ptr<PacketLossDetectorTypedBase<typename SensorT::packet_t>> packet_loss_detector_;
+  std::shared_ptr<ImuDecoderTypedBase<typename SensorT::packet_t>> imu_decoder_;
 
   typename SensorT::packet_t packet_;
 
@@ -125,7 +127,7 @@ private:
     size_t start_block_id, size_t n_blocks,
     const typename decltype(scan_cutter_)::State & scan_state)
   {
-    uint64_t packet_timestamp_ns = hesai_packet::get_timestamp_ns(packet_);
+    uint64_t packet_timestamp_ns = sensor_.get_packet_timestamp_ns(packet_);
     uint32_t raw_azimuth = packet_.body.blocks[start_block_id].get_azimuth();
 
     std::vector<const typename SensorT::packet_t::body_t::block_t::unit_t *> return_units;
@@ -304,7 +306,7 @@ private:
   void on_set_timestamp(uint8_t buffer_index)
   {
     auto & frame = frame_buffers_[buffer_index];
-    frame.scan_timestamp_ns = hesai_packet::get_timestamp_ns(packet_);
+    frame.scan_timestamp_ns = sensor_.get_packet_timestamp_ns(packet_);
     frame.scan_timestamp_ns +=
       sensor_.get_earliest_point_time_offset_for_block(current_block_id_, packet_);
   }
@@ -322,6 +324,7 @@ public:
       functional_safety_decoder,
     const std::shared_ptr<PacketLossDetectorTypedBase<typename SensorT::packet_t>> &
       packet_loss_detector,
+    const std::shared_ptr<ImuDecoderTypedBase<typename SensorT::packet_t>> & imu_decoder,
     std::shared_ptr<point_filters::BlockageMaskPlugin> blockage_mask_plugin)
   : sensor_configuration_(sensor_configuration),
     angle_corrector_(correction_data),
@@ -333,6 +336,7 @@ public:
       [this](uint8_t buffer_index) { on_set_timestamp(buffer_index); }),
     functional_safety_decoder_(functional_safety_decoder),
     packet_loss_detector_(packet_loss_detector),
+    imu_decoder_(imu_decoder),
     logger_(logger),
     blockage_mask_plugin_(std::move(blockage_mask_plugin))
   {
@@ -363,6 +367,10 @@ public:
       packet_loss_detector_->update(packet_);
     }
 
+    if (imu_decoder_) {
+      imu_decoder_->update(packet_);
+    }
+
     // Even if the checksums of other parts of the packet are invalid, functional safety info
     // is still checked. This is a null-op for sensors that do not support functional safety.
     if (functional_safety_decoder_) {
@@ -390,7 +398,7 @@ public:
     uint64_t decode_duration_ns = decode_watch.elapsed_ns();
 
     PacketMetadata metadata;
-    metadata.packet_timestamp_ns = hesai_packet::get_timestamp_ns(packet_);
+    metadata.packet_timestamp_ns = sensor_.get_packet_timestamp_ns(packet_);
     metadata.did_scan_complete = did_scan_complete_;
     return {PerformanceCounters{decode_duration_ns - callback_time_ns_}, metadata};
   }

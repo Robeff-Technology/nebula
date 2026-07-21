@@ -187,7 +187,7 @@ nebula::Status HesaiRosWrapper::declare_and_get_sensor_config_params()
   config.hires_mode = false;
   if (
     config.sensor_model == drivers::SensorModel::HESAI_PANDAR128_E4X ||
-    config.sensor_model == drivers::SensorModel::HESAI_PANDAR128_E3X) {
+    config.sensor_model == drivers::SensorModel::HESAI_PANDARJT128) {
     config.hires_mode = this->declare_parameter<bool>("hires_mode", param_read_write());
   }
 
@@ -277,6 +277,11 @@ nebula::Status HesaiRosWrapper::declare_and_get_sensor_config_params()
     } else {
       config.blockage_mask_horizontal_bin_size_mdeg = blockage_mask_horizontal_bin_size_mdeg;
     }
+  }
+
+  if (supports_imu(config.sensor_model)) {
+    config.imu_output_enabled =
+      declare_parameter<bool>("imu_output.enabled", true, param_read_write());
   }
 
   {
@@ -494,7 +499,8 @@ rcl_interfaces::msg::SetParametersResult HesaiRosWrapper::on_parameter_change(
     get_param(p, calibration_parameter_name, new_cfg.calibration_path) |
     get_param(p, "point_filters.downsample_mask.path", downsample_mask_path) |
     get_param(
-      p, "blockage_mask_output.horizontal_bin_size_mdeg", blockage_mask_horizontal_bin_size_mdeg);
+      p, "blockage_mask_output.horizontal_bin_size_mdeg", blockage_mask_horizontal_bin_size_mdeg) |
+    get_param(p, "imu_output.enabled", new_cfg.imu_output_enabled);
 
   // Currently, all of the sub-wrappers read-only parameters, so they do not be queried for updates
 

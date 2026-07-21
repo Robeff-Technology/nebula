@@ -123,6 +123,9 @@
         "blockage_mask_output": {
           "$ref": "lidar_hesai.json#/definitions/blockage_mask_output"
         },
+        "imu_output": {
+          "$ref": "lidar_hesai.json#/definitions/imu_output"
+        },
         "diagnostics": {
           "$ref": "lidar_hesai.json#/definitions/diagnostics",
           "required": [

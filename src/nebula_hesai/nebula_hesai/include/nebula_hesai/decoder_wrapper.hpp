@@ -33,6 +33,7 @@
 #include <nebula_msgs/msg/nebula_packet.hpp>
 #include <pandar_msgs/msg/pandar_scan.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 
 #include <limits>
@@ -60,6 +61,8 @@ public:
     std::unique_ptr<nebula_msgs::msg::NebulaPacket> packet_msg, uint64_t receive_time_ns);
 
   void on_pointcloud_decoded(const drivers::NebulaPointCloudPtr & pointcloud, double timestamp_s);
+
+  void on_imu_decoded(const drivers::ImuSample & sample);
 
   void on_config_change(
     const std::shared_ptr<const nebula::drivers::HesaiSensorConfiguration> & new_config);
@@ -158,6 +161,8 @@ private:
   NEBULA_PUBLISHER_PTR(sensor_msgs::msg::PointCloud2) aw_points_base_pub_;
 
   NEBULA_PUBLISHER_PTR(sensor_msgs::msg::Image) blockage_mask_pub_;
+
+  rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
 
   custom_diagnostic_tasks::RateBoundStatus publish_diagnostic_;
   std::optional<FunctionalSafetyDiagnosticTask> functional_safety_diagnostic_;
