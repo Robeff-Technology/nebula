@@ -81,14 +81,20 @@ struct PacketJT128 : public PacketBase<2, 128, 2, 100>
 ///    is no reference to confirm whether JT128 needs the same first/last flip that OT128/128E3X
 ///    need. Left as the `HesaiSensor` base class default (no flip) absent evidence either way.
 ///
-/// Confirmed on real hardware (2026-07-16, PC as PTP grandmaster over 1588v2/UDP, PTP locked with
-/// offsetFromMaster/meanPathDelay both 0): the JT128 populates the packet's `date_time` field
-/// (nominally UTC, per both this protocol's field naming and the vendor SDK's own `m_u8UTC` name)
-/// with TAI time instead, i.e. it does not apply the PTP `currentUtcOffset` correction. This makes
-/// its timestamp exactly (to the millisecond, over repeated live samples) 37s ahead of true UTC --
-/// exactly the current TAI-UTC leap-second offset. `get_packet_timestamp_ns` below corrects for
-/// this by subtracting the TAI-UTC offset appropriate for the packet's own date (so old recordings
-/// decode correctly too), looked up from `tai_minus_utc_seconds`.
+/// Timestamp / TAI-vs-UTC note: whether the JT128 emits TAI or true UTC in its packet `date_time`
+/// field depends on the PTP grandmaster it is synced to, specifically whether that master advertises
+/// a non-zero `currentUtcOffset`:
+///  - With a plain PC as PTP grandmaster over 1588v2/UDP (bench setup, confirmed 2026-07-16, PTP
+///    locked with offsetFromMaster/meanPathDelay both 0), the master advertises currentUtcOffset 0
+///    and the JT128 emits TAI -- i.e. exactly 37s ahead of true UTC (the current TAI-UTC
+///    leap-second offset), verified to the millisecond over repeated live samples.
+///  - On the robione6 vehicle the PTP grandmaster is the GNSS/INS unit, which advertises the correct
+///    currentUtcOffset, so the JT128 emits true UTC directly. Applying the leap-second subtraction
+///    in that case pushes the cloud 37s into the past.
+/// Because the vehicle case is the operational one, `get_packet_timestamp_ns` below treats the
+/// packet timestamp as already-UTC and does NOT subtract the offset. The `tai_minus_utc_seconds`
+/// leap-second table is retained (unused) so the TAI correction can be re-enabled easily if a
+/// TAI-emitting sync source (e.g. a bench PC grandmaster) is ever used.
 class PandarJT128 : public HesaiSensor<hesai_packet::PacketJT128>
 {
 private:
@@ -100,7 +106,7 @@ private:
   /// @brief TAI-UTC offset (leap seconds) in effect from a given Unix time (UTC), per IERS
   /// Bulletin C. Update this table if IERS ever schedules another leap second (none since
   /// 2017-01-01, and the leap second is slated for discontinuation by 2035).
-  [[nodiscard]] static int32_t tai_minus_utc_seconds(int64_t utc_unix_time_s)
+  [[nodiscard]] [[maybe_unused]] static int32_t tai_minus_utc_seconds(int64_t utc_unix_time_s)
   {
     struct LeapSecondEntry
     {
@@ -182,9 +188,10 @@ public:
 
   [[nodiscard]] uint64_t get_packet_timestamp_ns(const packet_t & packet) const override
   {
-    uint64_t raw_ns = hesai_packet::get_timestamp_ns(packet);
-    int32_t offset_s = tai_minus_utc_seconds(static_cast<int64_t>(raw_ns / 1'000'000'000ULL));
-    return raw_ns - static_cast<uint64_t>(offset_s) * 1'000'000'000ULL;
+    // The vehicle's GNSS/INS PTP grandmaster advertises the correct currentUtcOffset, so the JT128
+    // already emits true UTC here -- do not subtract the leap-second offset (see class note above).
+    // To handle a TAI-emitting sync source instead, subtract tai_minus_utc_seconds(raw_ns / 1e9).
+    return hesai_packet::get_timestamp_ns(packet);
   }
 };
 
