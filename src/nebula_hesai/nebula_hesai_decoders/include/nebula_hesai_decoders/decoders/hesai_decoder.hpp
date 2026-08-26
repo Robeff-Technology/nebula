@@ -257,10 +257,23 @@ private:
   uint32_t get_point_time_relative(
     uint64_t scan_timestamp_ns, uint64_t packet_timestamp_ns, size_t block_id, size_t channel_id)
   {
-    auto point_to_packet_offset_ns =
+    const int64_t point_to_packet_offset_ns =
       sensor_.get_packet_relative_point_time_offset(block_id, channel_id, packet_);
-    auto packet_to_scan_offset_ns = static_cast<uint32_t>(packet_timestamp_ns - scan_timestamp_ns);
-    return packet_to_scan_offset_ns + point_to_packet_offset_ns;
+    const int64_t packet_to_scan_offset_ns =
+      static_cast<int64_t>(packet_timestamp_ns) - static_cast<int64_t>(scan_timestamp_ns);
+    const int64_t point_to_scan_offset_ns = packet_to_scan_offset_ns + point_to_packet_offset_ns;
+
+    // The scan timestamp is seeded with the earliest point offset of the packet that starts the scan
+    // (see on_set_timestamp), so this is normally non-negative. It can still go negative: a later
+    // packet may carry a more negative per-channel/block offset than the seeding packet did, or the
+    // sensor may emit a packet timestamped slightly before the scan start. Computed in unsigned
+    // arithmetic that wrapped around to ~4.29 s, which the distortion corrector then integrates ego
+    // motion over, flinging those points far from the sensor. Clamp to the scan start instead.
+    if (point_to_scan_offset_ns < 0) {
+      return 0;
+    }
+
+    return static_cast<uint32_t>(point_to_scan_offset_ns);
   }
 
   DecodeFrame initialize_frame() const
