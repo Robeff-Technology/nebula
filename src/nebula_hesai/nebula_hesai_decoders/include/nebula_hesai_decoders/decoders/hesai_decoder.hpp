@@ -33,6 +33,7 @@
 #include <rclcpp/rclcpp.hpp>
 
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <memory>
@@ -98,15 +99,35 @@ private:
 
   std::array<DecodeFrame, 2> frame_buffers_{initialize_frame(), initialize_frame()};
 
+  /// How often undecodable packets are reported at most, see @ref parse_packet
+  static constexpr std::chrono::seconds k_malformed_packet_log_interval{5};
+  /// Undecodable packets seen since the last report
+  uint64_t malformed_packet_count_{0};
+  std::chrono::steady_clock::time_point last_malformed_packet_log_{};
+
   /// @brief Validates and parse PandarPacket. Checks size and, if present, CRC checksums.
   /// @param packet The incoming PandarPacket
   /// @return Whether the packet was parsed successfully
   bool parse_packet(const std::vector<uint8_t> & packet)
   {
     if (packet.size() < sizeof(typename SensorT::packet_t)) {
-      NEBULA_LOG_STREAM(
-        logger_->error, "Packet size mismatch: " << packet.size() << " | Expected at least: "
-                                                 << sizeof(typename SensorT::packet_t));
+      // Some units interleave short status datagrams with the point cloud stream.
+      // They are not decodable and arrive at sensor rate, so logging every one
+      // floods the console (hundreds of lines per launch) and drowns out
+      // everything else. Report the first one straight away, then at most once
+      // per interval, carrying the number suppressed so the rate stays visible.
+      ++malformed_packet_count_;
+      const auto now = std::chrono::steady_clock::now();
+      if (now - last_malformed_packet_log_ >= k_malformed_packet_log_interval) {
+        NEBULA_LOG_STREAM(
+          logger_->error, "Packet size mismatch: "
+                            << packet.size() << " | Expected at least: "
+                            << sizeof(typename SensorT::packet_t) << " ("
+                            << malformed_packet_count_
+                            << " undecodable packet(s) since last report)");
+        last_malformed_packet_log_ = now;
+        malformed_packet_count_ = 0;
+      }
       return false;
     }
 
