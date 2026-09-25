@@ -153,6 +153,8 @@ private:
 
   pandar_msgs::msg::PandarScan::UniquePtr current_scan_msg_;
   rclcpp::Publisher<pandar_msgs::msg::PandarScan>::SharedPtr packets_pub_;
+  // Only touched from the decode thread; refreshed once per scan.
+  bool accumulate_packets_{true};
   std::optional<SingleConsumerProcessor<pandar_msgs::msg::PandarScan::UniquePtr>>
     packets_pub_thread_;
 

@@ -134,11 +134,9 @@ drivers::PacketDecodeResult HesaiDecoderWrapper::process_cloud_packet(
 {
   current_scan_perf_counters_.receive_time_current_scan_ns += receive_time_ns;
 
-  // Ideally, we would only accumulate packets if someone is subscribed to the packets topic.
-  // However, checking for subscriptions in the decode thread (here) causes contention with the
-  // publish thread, negating the benefits of multi-threading.
-  // Not checking is an okay trade-off for the time being.
-  if (packets_pub_) {
+  // Checking for subscriptions per packet causes contention with the publish thread, so the check
+  // is done once per scan in on_pointcloud_decoded() and cached in accumulate_packets_.
+  if (packets_pub_ && accumulate_packets_) {
     if (current_scan_msg_->packets.size() == 0) {
       current_scan_msg_->header.stamp = packet_msg->stamp;
     }
@@ -173,6 +171,11 @@ void HesaiDecoderWrapper::on_pointcloud_decoded(
 
     current_scan_msg_ = std::make_unique<pandar_msgs::msg::PandarScan>();
   }
+
+  // Decide once per scan whether the next scan's packets are collected. Without a subscriber
+  // (e.g. no packet recording) this saves copying every packet and publishing ~27 MB/s.
+  accumulate_packets_ = packets_pub_ && (packets_pub_->get_subscription_count() +
+                                         packets_pub_->get_intra_process_subscription_count()) > 0;
 
   rclcpp::Time cloud_stamp = rclcpp::Time(seconds_to_chrono_nano_seconds(timestamp_s).count());
 
