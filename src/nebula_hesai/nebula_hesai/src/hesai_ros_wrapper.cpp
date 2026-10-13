@@ -30,8 +30,27 @@
 
 namespace nebula::ros
 {
+namespace
+{
+/// Intra-process for the whole node, except with use_cuda_decoder: cuda_blackboard's publisher
+/// negotiates over transient_local topics, which node-wide intra-process does not allow, and
+/// enables intra-process on its point cloud publisher itself. The node's parameters do not exist
+/// yet here, so the setting is read from the overrides (as a container passes them).
+rclcpp::NodeOptions make_node_options(const rclcpp::NodeOptions & options)
+{
+  for (const auto & parameter : options.parameter_overrides()) {
+    if (
+      parameter.get_name() == "use_cuda_decoder" &&
+      parameter.get_type() == rclcpp::ParameterType::PARAMETER_BOOL && parameter.as_bool()) {
+      return rclcpp::NodeOptions(options).use_intra_process_comms(false);
+    }
+  }
+  return rclcpp::NodeOptions(options).use_intra_process_comms(true);
+}
+}  // namespace
+
 HesaiRosWrapper::HesaiRosWrapper(const rclcpp::NodeOptions & options)
-: rclcpp::Node("hesai_ros_wrapper", rclcpp::NodeOptions(options).use_intra_process_comms(true)),
+: rclcpp::Node("hesai_ros_wrapper", make_node_options(options)),
   wrapper_status_(Status::NOT_INITIALIZED),
   sensor_cfg_ptr_(nullptr),
   diagnostic_updater_general_((declare_parameter<bool>("diagnostic_updater.use_fqn", true), this)),

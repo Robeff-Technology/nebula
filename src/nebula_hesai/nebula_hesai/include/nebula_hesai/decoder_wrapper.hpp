@@ -42,6 +42,22 @@
 #include <optional>
 #include <utility>
 
+// cudaStream_t, without including the CUDA headers here
+struct CUstream_st;
+
+namespace nebula::drivers
+{
+class HesaiCudaDecoder128E4X;
+struct CudaDecodedScan;
+}  // namespace nebula::drivers
+
+namespace cuda_blackboard
+{
+template <typename T>
+class CudaBlackboardPublisher;
+class CudaPointCloud2;
+}  // namespace cuda_blackboard
+
 namespace nebula::ros
 {
 class HesaiDecoderWrapper
@@ -62,6 +78,9 @@ public:
 
   void on_pointcloud_decoded(const drivers::NebulaPointCloudPtr & pointcloud, double timestamp_s);
 
+  /// The CUDA decoder's counterpart of on_pointcloud_decoded(): the scan is in GPU memory
+  void on_cuda_pointcloud_decoded(const drivers::CudaDecodedScan & scan, double timestamp_s);
+
   void on_imu_decoded(const drivers::ImuSample & sample);
 
   void on_config_change(
@@ -80,6 +99,21 @@ public:
   nebula::Status status();
 
 private:
+  /// Publishes the packets of the scan that just completed, and decides whether the next scan's
+  /// packets are collected
+  void publish_scan_packets();
+
+  /// aw_points and aw_points_ex, from a scan in host memory
+  void publish_autoware_clouds(
+    const drivers::NebulaPointCloud & pointcloud, double timestamp_s,
+    const rclcpp::Time & cloud_stamp);
+
+  /// Publishes `pandar_points` on cuda_blackboard (use_cuda_decoder); `device_points` holds
+  /// n_points NebulaPoints in GPU memory, ready for work queued on `stream`
+  void publish_cuda_cloud(
+    const void * device_points, size_t n_points, CUstream_st * stream,
+    const rclcpp::Time & cloud_stamp);
+
   void publish_cloud(
     NEBULA_MESSAGE_UNIQUE_PTR(sensor_msgs::msg::PointCloud2) && pointcloud,
     const NEBULA_PUBLISHER_PTR(sensor_msgs::msg::PointCloud2) & publisher);
@@ -150,6 +184,14 @@ private:
 
   std::shared_ptr<drivers::HesaiDriver> driver_ptr_;
   std::mutex mtx_driver_ptr_;
+
+  /// use_cuda_decoder: OT128 points are generated on the GPU and `pandar_points` goes over
+  /// cuda_blackboard. Only when nebula_hesai was built with CUDA (nebula_hesai_cuda).
+  bool use_cuda_decoder_{false};
+  /// Replaces driver_ptr_ while the configuration is supported by the CUDA decoder
+  std::shared_ptr<drivers::HesaiCudaDecoder128E4X> cuda_decoder_;
+  std::shared_ptr<cuda_blackboard::CudaBlackboardPublisher<cuda_blackboard::CudaPointCloud2>>
+    cuda_points_pub_;
 
   pandar_msgs::msg::PandarScan::UniquePtr current_scan_msg_;
   rclcpp::Publisher<pandar_msgs::msg::PandarScan>::SharedPtr packets_pub_;

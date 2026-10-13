@@ -48,6 +48,21 @@ ament_target_dependencies(
   sync_tooling_msgs
   rclcpp_components)
 
+# use_cuda_decoder: OT128 points generated on the GPU and published over cuda_blackboard. Built only
+# where both are available; otherwise the parameter falls back to the CPU decoder.
+find_package(nebula_hesai_cuda QUIET)
+find_package(cuda_blackboard QUIET)
+if(TARGET nebula_hesai_cuda::nebula_hesai_cuda AND cuda_blackboard_FOUND)
+  message(STATUS "CUDA decoder support is enabled")
+  set(NEBULA_HESAI_WITH_CUDA ON)
+  target_compile_definitions(hesai_ros_wrapper PRIVATE NEBULA_HESAI_WITH_CUDA)
+  target_include_directories(hesai_ros_wrapper SYSTEM
+                             PRIVATE ${cuda_blackboard_INCLUDE_DIRS})
+  target_link_libraries(
+    hesai_ros_wrapper PRIVATE nebula_hesai_cuda::nebula_hesai_cuda
+                              ${cuda_blackboard_LIBRARIES})
+endif()
+
 if("$ENV{ENABLE_AGNOCAST}")
   message(STATUS "Agnocast support is enabled")
   ament_target_dependencies(hesai_ros_wrapper PUBLIC agnocastlib)
@@ -211,6 +226,10 @@ ament_export_dependencies(
   sync_tooling_msgs
   autoware_utils_debug
   autoware_internal_debug_msgs)
+
+if(NEBULA_HESAI_WITH_CUDA)
+  ament_export_dependencies(nebula_hesai_cuda cuda_blackboard)
+endif()
 
 if("$ENV{ENABLE_AGNOCAST}")
   ament_export_dependencies(agnocastlib)

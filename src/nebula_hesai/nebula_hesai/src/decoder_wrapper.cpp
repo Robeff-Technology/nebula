@@ -21,9 +21,20 @@
 #include <autoware_internal_debug_msgs/msg/int64_stamped.hpp>
 #include <sensor_msgs/image_encodings.hpp>
 
+#ifdef NEBULA_HESAI_WITH_CUDA
+#include <cuda_blackboard/cuda_blackboard_publisher.hpp>
+#include <cuda_blackboard/cuda_pointcloud2.hpp>
+#include <cuda_blackboard/cuda_unique_ptr.hpp>
+#include <nebula_hesai_cuda/hesai_cuda_decoder.hpp>
+
+#include <cuda_runtime_api.h>
+#endif
+
 #include <algorithm>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
+#include <string>
 #include <utility>
 
 #if defined(__clang__)
@@ -60,11 +71,20 @@ HesaiDecoderWrapper::HesaiDecoderWrapper(
 
   RCLCPP_INFO(logger_, "Starting Decoder");
 
+  use_cuda_decoder_ = parent_node->declare_parameter<bool>("use_cuda_decoder", false);
+#ifndef NEBULA_HESAI_WITH_CUDA
+  if (use_cuda_decoder_) {
+    RCLCPP_WARN(
+      logger_, "use_cuda_decoder is set, but nebula_hesai was built without CUDA; decoding on the CPU");
+    use_cuda_decoder_ = false;
+  }
+#endif
+
   initialize_functional_safety(diagnostic_updater, sensor_cfg_->functional_safety);
   initialize_packet_loss_diagnostic(diagnostic_updater);
 
   driver_ptr_ = initialize_driver(sensor_cfg_, calibration_cfg_ptr_);
-  status_ = driver_ptr_->get_status();
+  status_ = cuda_decoder_ ? Status::OK : driver_ptr_->get_status();
 
   if (Status::OK != status_) {
     throw std::runtime_error("Error instantiating decoder: " + util::to_string(status_));
@@ -89,8 +109,18 @@ HesaiDecoderWrapper::HesaiDecoderWrapper(
   auto pointcloud_qos =
     rclcpp::QoS(rclcpp::QoSInitialization(qos_profile.history, 10), qos_profile);
 
-  nebula_points_pub_ = NEBULA_CREATE_PUBLISHER2(
-    sensor_msgs::msg::PointCloud2, &parent_node_, "pandar_points", pointcloud_qos);
+  if (use_cuda_decoder_) {
+#ifdef NEBULA_HESAI_WITH_CUDA
+    // Also serves plain PointCloud2 subscribers, copying the scan to the host only for them. Its
+    // cuda_blackboard negotiation runs on pandar_points/cuda: remap that along with pandar_points.
+    cuda_points_pub_ = std::make_shared<
+      cuda_blackboard::CudaBlackboardPublisher<cuda_blackboard::CudaPointCloud2>>(
+      parent_node_, "pandar_points");
+#endif
+  } else {
+    nebula_points_pub_ = NEBULA_CREATE_PUBLISHER2(
+      sensor_msgs::msg::PointCloud2, &parent_node_, "pandar_points", pointcloud_qos);
+  }
   aw_points_base_pub_ = NEBULA_CREATE_PUBLISHER2(
     sensor_msgs::msg::PointCloud2, &parent_node_, "aw_points", pointcloud_qos);
   aw_points_ex_pub_ = NEBULA_CREATE_PUBLISHER2(
@@ -149,7 +179,8 @@ drivers::PacketDecodeResult HesaiDecoderWrapper::process_cloud_packet(
   }
 
   std::lock_guard lock(mtx_driver_ptr_);
-  auto decode_result = driver_ptr_->parse_cloud_packet(packet_msg->data);
+  auto decode_result = cuda_decoder_ ? cuda_decoder_->unpack(packet_msg->data)
+                                     : driver_ptr_->parse_cloud_packet(packet_msg->data);
 
   current_scan_perf_counters_.decode_time_current_scan_ns +=
     decode_result.performance_counters.decode_time_ns;
@@ -162,6 +193,131 @@ void HesaiDecoderWrapper::on_pointcloud_decoded(
 {
   util::Stopwatch publish_watch;
 
+  publish_scan_packets();
+
+  rclcpp::Time cloud_stamp = rclcpp::Time(seconds_to_chrono_nano_seconds(timestamp_s).count());
+
+  if (cuda_points_pub_) {
+    // use_cuda_decoder with a configuration the CUDA decoder does not support: the topic still
+    // goes over cuda_blackboard, so the CPU decoder's scan is uploaded
+#ifdef NEBULA_HESAI_WITH_CUDA
+    cuda_blackboard::CudaUniquePtr<uint8_t[]> device_points;
+    const size_t n_bytes = pointcloud->size() * sizeof(drivers::NebulaPoint);
+    if (n_bytes > 0) {
+      device_points = cuda_blackboard::make_unique<uint8_t[]>(n_bytes);
+      const cudaError_t error =
+        cudaMemcpy(device_points.get(), pointcloud->data(), n_bytes, cudaMemcpyHostToDevice);
+      if (error != cudaSuccess) {
+        throw std::runtime_error(std::string("cudaMemcpy scan: ") + cudaGetErrorString(error));
+      }
+    }
+    publish_cuda_cloud(device_points.get(), pointcloud->size(), nullptr, cloud_stamp);
+#endif
+  } else if (NEBULA_HAS_ANY_SUBSCRIPTIONS(nebula_points_pub_)) {
+    auto ros_pc_msg_ptr = ALLOCATE_OUTPUT_MESSAGE_UNIQUE(nebula_points_pub_);
+    *ros_pc_msg_ptr = nebula::ros::to_ros_msg(*pointcloud);
+    ros_pc_msg_ptr->header.stamp = cloud_stamp;
+    publish_cloud(std::move(ros_pc_msg_ptr), nebula_points_pub_);
+  }
+
+  publish_autoware_clouds(*pointcloud, timestamp_s, cloud_stamp);
+
+  publish_diagnostic_.tick();
+
+  uint64_t publish_duration_ns = publish_watch.elapsed_ns();
+  current_scan_perf_counters_.publish_time_current_scan_ns += publish_duration_ns;
+
+  publish_and_reset_performance_counters(cloud_stamp);
+}
+
+void HesaiDecoderWrapper::on_cuda_pointcloud_decoded(
+  [[maybe_unused]] const drivers::CudaDecodedScan & scan, double timestamp_s)
+{
+  util::Stopwatch publish_watch;
+
+  publish_scan_packets();
+
+  rclcpp::Time cloud_stamp = rclcpp::Time(seconds_to_chrono_nano_seconds(timestamp_s).count());
+
+#ifdef NEBULA_HESAI_WITH_CUDA
+  publish_cuda_cloud(scan.points, scan.n_points, scan.stream, cloud_stamp);
+
+  // aw_points / aw_points_ex are built on the host; only copy the scan back if someone listens
+  if (
+    NEBULA_HAS_ANY_SUBSCRIPTIONS(aw_points_base_pub_) ||
+    NEBULA_HAS_ANY_SUBSCRIPTIONS(aw_points_ex_pub_)) {
+    drivers::NebulaPointCloud pointcloud;
+    pointcloud.resize(scan.n_points);
+    if (scan.n_points > 0) {
+      cudaError_t error = cudaMemcpyAsync(
+        pointcloud.data(), scan.points, scan.n_points * sizeof(drivers::NebulaPoint),
+        cudaMemcpyDeviceToHost, scan.stream);
+      if (error == cudaSuccess) {
+        error = cudaStreamSynchronize(scan.stream);
+      }
+      if (error != cudaSuccess) {
+        throw std::runtime_error(std::string("cudaMemcpy scan: ") + cudaGetErrorString(error));
+      }
+    }
+    publish_autoware_clouds(pointcloud, timestamp_s, cloud_stamp);
+  }
+#endif
+
+  publish_diagnostic_.tick();
+
+  uint64_t publish_duration_ns = publish_watch.elapsed_ns();
+  current_scan_perf_counters_.publish_time_current_scan_ns += publish_duration_ns;
+
+  publish_and_reset_performance_counters(cloud_stamp);
+}
+
+void HesaiDecoderWrapper::publish_cuda_cloud(
+  [[maybe_unused]] const void * device_points, [[maybe_unused]] size_t n_points,
+  [[maybe_unused]] CUstream_st * stream, [[maybe_unused]] const rclcpp::Time & cloud_stamp)
+{
+#ifdef NEBULA_HESAI_WITH_CUDA
+  if (!cuda_points_pub_) {
+    return;
+  }
+
+  // Same layout as to_ros_msg() gives the CPU decoder's clouds
+  const auto layout = nebula::ros::to_ros_msg(drivers::NebulaPointCloud{});
+  auto msg = std::make_unique<cuda_blackboard::CudaPointCloud2>();
+  msg->header.stamp = cloud_stamp;
+  msg->header.frame_id = sensor_cfg_->frame_id;
+  msg->height = 1;
+  msg->width = static_cast<uint32_t>(n_points);
+  msg->fields = layout.fields;
+  msg->is_bigendian = layout.is_bigendian;
+  msg->point_step = layout.point_step;
+  msg->row_step = msg->point_step * msg->width;
+  msg->is_dense = layout.is_dense;
+
+  const size_t n_bytes = n_points * sizeof(drivers::NebulaPoint);
+  if (n_bytes > 0) {
+    // The decoder's buffer is reused for the next scan; the message needs its own. Copied on the
+    // decoder's stream: the legacy default stream would wait for every other stream in the
+    // container. cuda_blackboard records no ready event, so the copy is finished before publishing.
+    msg->data = cuda_blackboard::make_unique<uint8_t[]>(n_bytes);
+    cudaError_t error = cudaMemcpyAsync(
+      msg->data.get(), device_points, n_bytes, cudaMemcpyDeviceToDevice, stream);
+    if (error == cudaSuccess) {
+      error = cudaStreamSynchronize(stream);
+    }
+    if (error != cudaSuccess) {
+      throw std::runtime_error(std::string("cudaMemcpy scan: ") + cudaGetErrorString(error));
+    }
+  }
+
+  if (msg->header.stamp.sec < 0) {
+    RCLCPP_WARN_STREAM(logger_, "Timestamp error, verify clock source.");
+  }
+  cuda_points_pub_->publish(std::move(msg));
+#endif
+}
+
+void HesaiDecoderWrapper::publish_scan_packets()
+{
   // Publish scan message only if it has been written to
   if (current_scan_msg_ && !current_scan_msg_->packets.empty() && packets_pub_thread_) {
     bool success = packets_pub_thread_->try_push(std::move(current_scan_msg_));
@@ -176,18 +332,15 @@ void HesaiDecoderWrapper::on_pointcloud_decoded(
   // (e.g. no packet recording) this saves copying every packet and publishing ~27 MB/s.
   accumulate_packets_ = packets_pub_ && (packets_pub_->get_subscription_count() +
                                          packets_pub_->get_intra_process_subscription_count()) > 0;
+}
 
-  rclcpp::Time cloud_stamp = rclcpp::Time(seconds_to_chrono_nano_seconds(timestamp_s).count());
-
-  if (NEBULA_HAS_ANY_SUBSCRIPTIONS(nebula_points_pub_)) {
-    auto ros_pc_msg_ptr = ALLOCATE_OUTPUT_MESSAGE_UNIQUE(nebula_points_pub_);
-    *ros_pc_msg_ptr = nebula::ros::to_ros_msg(*pointcloud);
-    ros_pc_msg_ptr->header.stamp = cloud_stamp;
-    publish_cloud(std::move(ros_pc_msg_ptr), nebula_points_pub_);
-  }
+void HesaiDecoderWrapper::publish_autoware_clouds(
+  const drivers::NebulaPointCloud & pointcloud, double timestamp_s,
+  const rclcpp::Time & cloud_stamp)
+{
   if (NEBULA_HAS_ANY_SUBSCRIPTIONS(aw_points_base_pub_)) {
     auto autoware_cloud_xyzi =
-      nebula::drivers::convert_point_xyzircaedt_to_point_xyzir(*pointcloud);
+      nebula::drivers::convert_point_xyzircaedt_to_point_xyzir(pointcloud);
     auto ros_pc_msg_ptr = ALLOCATE_OUTPUT_MESSAGE_UNIQUE(aw_points_base_pub_);
     *ros_pc_msg_ptr = nebula::ros::to_ros_msg(autoware_cloud_xyzi);
     ros_pc_msg_ptr->header.stamp = cloud_stamp;
@@ -195,19 +348,12 @@ void HesaiDecoderWrapper::on_pointcloud_decoded(
   }
   if (NEBULA_HAS_ANY_SUBSCRIPTIONS(aw_points_ex_pub_)) {
     auto autoware_ex_cloud =
-      nebula::drivers::convert_point_xyzircaedt_to_point_xyziradt(*pointcloud, timestamp_s);
+      nebula::drivers::convert_point_xyzircaedt_to_point_xyziradt(pointcloud, timestamp_s);
     auto ros_pc_msg_ptr = ALLOCATE_OUTPUT_MESSAGE_UNIQUE(aw_points_ex_pub_);
     *ros_pc_msg_ptr = nebula::ros::to_ros_msg(autoware_ex_cloud);
     ros_pc_msg_ptr->header.stamp = cloud_stamp;
     publish_cloud(std::move(ros_pc_msg_ptr), aw_points_ex_pub_);
   }
-
-  publish_diagnostic_.tick();
-
-  uint64_t publish_duration_ns = publish_watch.elapsed_ns();
-  current_scan_perf_counters_.publish_time_current_scan_ns += publish_duration_ns;
-
-  publish_and_reset_performance_counters(cloud_stamp);
 }
 
 void HesaiDecoderWrapper::on_imu_decoded(const drivers::ImuSample & sample)
@@ -371,6 +517,26 @@ std::shared_ptr<drivers::HesaiDriver> HesaiDecoderWrapper::initialize_driver(
     imu_cb = [this](const drivers::ImuSample & sample) { on_imu_decoded(sample); };
   }
 
+  cuda_decoder_.reset();
+#ifdef NEBULA_HESAI_WITH_CUDA
+  if (use_cuda_decoder_) {
+    if (auto reason = drivers::HesaiCudaDecoder128E4X::unsupported_reason(*config)) {
+      RCLCPP_WARN_STREAM(logger_, "Decoding on the CPU: " << *reason);
+    } else {
+      RCLCPP_INFO(logger_, "Generating the points on the GPU (use_cuda_decoder)");
+      cuda_decoder_ = std::make_shared<drivers::HesaiCudaDecoder128E4X>(
+        config, calibration, std::make_shared<drivers::loggers::RclcppLogger>(logger_),
+        std::move(alive_cb), std::move(stuck_cb), std::move(status_cb), std::move(lost_cb),
+        std::move(imu_cb));
+      cuda_decoder_->set_cuda_pointcloud_callback(
+        [this](const drivers::CudaDecodedScan & scan, double timestamp_s) {
+          on_cuda_pointcloud_decoded(scan, timestamp_s);
+        });
+      return nullptr;
+    }
+  }
+#endif
+
   return std::make_shared<drivers::HesaiDriver>(
     config, calibration, std::make_shared<drivers::loggers::RclcppLogger>(logger_),
     std::move(pointcloud_cb), std::move(alive_cb), std::move(stuck_cb), std::move(status_cb),
@@ -380,6 +546,10 @@ std::shared_ptr<drivers::HesaiDriver> HesaiDecoderWrapper::initialize_driver(
 nebula::Status HesaiDecoderWrapper::status()
 {
   std::lock_guard lock(mtx_driver_ptr_);
+
+  if (cuda_decoder_) {
+    return nebula::Status::OK;
+  }
 
   if (!driver_ptr_) {
     return nebula::Status::NOT_INITIALIZED;
