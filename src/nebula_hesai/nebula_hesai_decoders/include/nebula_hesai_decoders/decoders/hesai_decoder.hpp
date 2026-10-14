@@ -38,6 +38,8 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <sstream>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -116,18 +118,10 @@ private:
       // floods the console (hundreds of lines per launch) and drowns out
       // everything else. Report the first one straight away, then at most once
       // per interval, carrying the number suppressed so the rate stays visible.
-      ++malformed_packet_count_;
-      const auto now = std::chrono::steady_clock::now();
-      if (now - last_malformed_packet_log_ >= k_malformed_packet_log_interval) {
-        NEBULA_LOG_STREAM(
-          logger_->error, "Packet size mismatch: "
-                            << packet.size() << " | Expected at least: "
-                            << sizeof(typename SensorT::packet_t) << " ("
-                            << malformed_packet_count_
-                            << " undecodable packet(s) since last report)");
-        last_malformed_packet_log_ = now;
-        malformed_packet_count_ = 0;
-      }
+      std::stringstream reason;
+      reason << "Packet size mismatch: " << packet.size()
+             << " | Expected at least: " << sizeof(typename SensorT::packet_t);
+      report_undecodable_packet(reason.str());
       return false;
     }
 
@@ -136,7 +130,31 @@ private:
       return false;
     }
 
+    // get_n_returns() throws on an unknown return mode, and an exception here ends the whole
+    // process (in a shared container: every lidar). Such a packet is not decodable; skip it.
+    if (!hesai_packet::is_known_return_mode(packet_.tail.return_mode)) {
+      std::stringstream reason;
+      reason << "Unknown return mode 0x" << std::hex
+             << static_cast<int>(packet_.tail.return_mode);
+      report_undecodable_packet(reason.str());
+      return false;
+    }
+
     return true;
+  }
+
+  /// @brief Log an undecodable packet: the first straight away, then at most once per interval
+  void report_undecodable_packet(const std::string & reason)
+  {
+    ++malformed_packet_count_;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last_malformed_packet_log_ >= k_malformed_packet_log_interval) {
+      NEBULA_LOG_STREAM(
+        logger_->error,
+        reason << " (" << malformed_packet_count_ << " undecodable packet(s) since last report)");
+      last_malformed_packet_log_ = now;
+      malformed_packet_count_ = 0;
+    }
   }
 
   /// @brief Converts a group of returns (i.e. 1 for single return, 2 for dual return, etc.) to

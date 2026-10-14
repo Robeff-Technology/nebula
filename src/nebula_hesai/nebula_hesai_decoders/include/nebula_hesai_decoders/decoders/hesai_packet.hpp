@@ -259,6 +259,27 @@ struct PacketBase
 /// @brief Get the number of returns for a given return mode
 /// @param return_mode The return mode
 /// @return The number of returns
+/// @brief Whether the return mode is one get_n_returns() knows. A packet with another value is
+/// not a point cloud packet (or is corrupt) and must not be decoded.
+inline bool is_known_return_mode(uint8_t return_mode)
+{
+  switch (return_mode) {
+    case return_mode::SINGLE_FIRST:
+    case return_mode::SINGLE_SECOND:
+    case return_mode::SINGLE_STRONGEST:
+    case return_mode::SINGLE_LAST:
+    case return_mode::DUAL_LAST_STRONGEST:
+    case return_mode::DUAL_FIRST_SECOND:
+    case return_mode::DUAL_FIRST_LAST:
+    case return_mode::DUAL_FIRST_STRONGEST:
+    case return_mode::DUAL_STRONGEST_SECONDSTRONGEST:
+    case return_mode::TRIPLE_FIRST_LAST_STRONGEST:
+      return true;
+    default:
+      return false;
+  }
+}
+
 inline int get_n_returns(uint8_t return_mode)
 {
   switch (return_mode) {
