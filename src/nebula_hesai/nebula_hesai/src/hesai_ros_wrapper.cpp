@@ -451,7 +451,15 @@ void HesaiRosWrapper::receive_scan_message_callback(
   for (auto & pkt : scan_msg->packets) {
     auto nebula_pkt_ptr = std::make_unique<nebula_msgs::msg::NebulaPacket>();
     nebula_pkt_ptr->stamp = pkt.stamp;
-    std::copy(pkt.data.begin(), pkt.data.end(), std::back_inserter(nebula_pkt_ptr->data));
+    // data is a fixed 1500-byte array; size is the datagram's real length. Copying all of it
+    // would turn short status datagrams into zero-padded "full" packets that the decoder then
+    // misreads. Bags whose size field was never set (0) keep the old behaviour.
+    const size_t n_bytes =
+      (pkt.size > 0 && pkt.size <= pkt.data.size()) ? pkt.size : pkt.data.size();
+    // One range copy: a back_inserter grows the vector byte by byte, ~10 M push_backs a second
+    // for a JT128's packet stream
+    nebula_pkt_ptr->data.assign(
+      pkt.data.begin(), pkt.data.begin() + static_cast<std::ptrdiff_t>(n_bytes));
 
     if (rclcpp::Time(pkt.stamp) < replay_state_->last_scan_timestamp_) {
       decoder_wrapper_->reset_decoder();

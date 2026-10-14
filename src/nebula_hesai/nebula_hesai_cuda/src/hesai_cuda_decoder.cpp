@@ -264,6 +264,22 @@ struct HesaiCudaDecoder128E4X::Impl
     }
 
     std::memcpy(&packet, raw_packet.data(), sizeof(packet_t));
+
+    // As in HesaiDecoder::parse_packet: get_n_returns() would throw and end the process
+    if (!hesai_packet::is_known_return_mode(packet.tail.return_mode)) {
+      ++malformed_packet_count;
+      const auto now = std::chrono::steady_clock::now();
+      if (now - last_malformed_packet_log >= k_log_interval) {
+        std::stringstream message;
+        message << "Unknown return mode 0x" << std::hex << static_cast<int>(packet.tail.return_mode)
+                << std::dec << " (" << malformed_packet_count
+                << " undecodable packet(s) since last report)";
+        logger->error(message.str());
+        last_malformed_packet_log = now;
+        malformed_packet_count = 0;
+      }
+      return false;
+    }
     return true;
   }
 
