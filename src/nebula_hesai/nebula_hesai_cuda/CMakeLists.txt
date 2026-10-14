@@ -14,9 +14,39 @@ if(NOT CMAKE_CUDA_COMPILER OR NOT CUDAToolkit_FOUND)
   return()
 endif()
 
+execute_process(
+  COMMAND ${CMAKE_CUDA_COMPILER} --version
+  OUTPUT_VARIABLE nvcc_version_output
+  ERROR_QUIET)
+string(REGEX MATCH "release ([0-9]+\\.[0-9]+)" _ "${nvcc_version_output}")
+set(nvcc_version "${CMAKE_MATCH_1}")
+
+# The architectures the installed nvcc knows (CUDA 11.5 from Ubuntu 22.04 stops at 87, 89 needs
+# 11.8). The last one is built as SASS and PTX, so newer GPUs (e.g. an RTX 50xx, sm_120) get the
+# kernel JIT-compiled by the driver; the others as SASS only. --fmad=false is applied when the PTX
+# is generated, so the JIT keeps the CPU decoder's float operations.
 if(NOT CMAKE_CUDA_ARCHITECTURES)
-  set(CMAKE_CUDA_ARCHITECTURES 75 86 87 89)
+  if(nvcc_version VERSION_GREATER_EQUAL 12.8)
+    set(CMAKE_CUDA_ARCHITECTURES 75-real 86-real 87-real 89-real 120)
+  elseif(nvcc_version VERSION_GREATER_EQUAL 11.8)
+    set(CMAKE_CUDA_ARCHITECTURES 75-real 86-real 87-real 89)
+  else()
+    set(CMAKE_CUDA_ARCHITECTURES 75-real 86-real 87)
+  endif()
+  message(STATUS "nvcc ${nvcc_version}: CUDA architectures ${CMAKE_CUDA_ARCHITECTURES}")
 endif()
+
+# nvcc before 11.6 cannot parse GCC 11's <functional> (pulled in by cub): "parameter packs not
+# expanded with '...'" in std_function.h. Ubuntu 22.04 ships nvcc 11.5 with GCC 11 as the default,
+# and GCC 10 next to it.
+if(NOT CMAKE_CUDA_HOST_COMPILER AND nvcc_version VERSION_LESS 11.6)
+  find_program(gxx_10 g++-10)
+  if(gxx_10)
+    set(CMAKE_CUDA_HOST_COMPILER ${gxx_10})
+    message(STATUS "nvcc ${nvcc_version}: CUDA host compiler ${gxx_10}")
+  endif()
+endif()
+
 enable_language(CUDA)
 
 set(CMAKE_CXX_STANDARD 17)
